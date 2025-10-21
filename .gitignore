@@ -1,0 +1,15 @@
+# Bỏ qua file dữ liệu, mô hình, môi trường ảo, file hệ thống
+sensor_data.csv
+soil_moisture_predictor.joblib
+plant_disease_model.h5
+class_indices.json
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+venv/
+.env
+.DS_Store
+.idea/
+.vscode/
