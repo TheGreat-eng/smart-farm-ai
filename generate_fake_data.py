@@ -3,53 +3,52 @@ from datetime import datetime, timedelta
 import random
 import numpy as np
 
-print("Generating fake sensor data...")
+print("Generating ADVANCED fake sensor data...")
 
 # Cấu hình
-NUM_DAYS = 20  # Tạo dữ liệu cho 20 ngày
+NUM_DAYS = 30  # Tăng số ngày dữ liệu lên 30 ngày
 SAMPLES_PER_HOUR = 60 # Dữ liệu mỗi phút
 TOTAL_SAMPLES = NUM_DAYS * 24 * SAMPLES_PER_HOUR
 START_TIME = datetime.now() - timedelta(days=NUM_DAYS)
 
-# Tạo chuỗi thời gian
 timestamps = [START_TIME + timedelta(minutes=i) for i in range(TOTAL_SAMPLES)]
 
-# Tạo dữ liệu giả lập
 data = []
+# Khởi tạo độ ẩm đất ban đầu
+current_soil_moisture = 75.0
+
 for ts in timestamps:
     hour = ts.hour
     
-    # Mô phỏng nhiệt độ theo chu kỳ ngày đêm
-    temp = 25.0 + 5 * np.sin(np.pi * (hour - 8) / 12) + random.uniform(-1, 1)
-    
-    # Mô phỏng độ ẩm không khí
-    humidity = 70.0 - 10 * np.sin(np.pi * (hour - 8) / 12) + random.uniform(-5, 5)
-    
-    # Mô phỏng độ ẩm đất (giảm dần và được "tưới" ngẫu nhiên)
-    # Cứ mỗi 6 giờ lại có khả năng được tưới
-    if ts.hour % 6 == 0 and ts.minute == 0:
-        soil_moisture = 80.0
-    else:
-        # Giảm dần tự nhiên
-        try:
-            soil_moisture = data[-1]['soilMoisture'] - 0.15 + random.uniform(-0.1, 0.1)
-        except IndexError:
-            soil_moisture = 75.0
-    soil_moisture = max(20, min(90, soil_moisture))
+    # === MÔ PHỎNG NÂNG CAO ===
+    # 1. Nhiệt độ & Ánh sáng (có mối liên quan)
+    # Dùng hàm sin để tạo chu kỳ ngày đêm mượt mà
+    temp = 24.0 + 8 * np.sin(np.pi * (hour - 8) / 14) + random.uniform(-0.5, 0.5)
+    light = max(0, 50000 * np.sin(np.pi * (hour - 7) / 13)) + random.uniform(0, 500) if 7 < hour < 20 else random.uniform(0, 20)
+    humidity = 80.0 - 20 * np.sin(np.pi * (hour - 6) / 15) + random.uniform(-5, 5)
 
-    # Mô phỏng ánh sáng
-    light = max(0, 50000 * np.sin(np.pi * (hour - 6) / 13)) + random.uniform(0, 1000) if 6 < hour < 19 else random.uniform(0, 50)
+    # 2. Độ ẩm đất (BỊ ẢNH HƯỞNG BỞI NHIỆT ĐỘ VÀ ÁNH SÁNG)
+    # Yếu tố bay hơi, phụ thuộc vào nhiệt độ và ánh sáng
+    evaporation_rate = (temp / 30) * 0.05 + (light / 50000) * 0.1
+    current_soil_moisture -= evaporation_rate
     
+    # Mô phỏng việc tưới nước ngẫu nhiên để reset độ ẩm
+    if random.random() < 0.01: # 1% cơ hội được tưới mỗi phút
+        current_soil_moisture = random.uniform(80, 90)
+
+    # Thêm nhiễu và đảm bảo trong khoảng hợp lệ
+    soil_moisture_with_noise = current_soil_moisture + random.uniform(-0.5, 0.5)
+    current_soil_moisture = max(15, min(95, soil_moisture_with_noise))
+
     data.append({
         'timestamp': ts.isoformat(),
         'deviceId': 'SOIL-001',
         'temperature': round(temp, 2),
         'humidity': round(humidity, 2),
-        'soilMoisture': round(soil_moisture, 2),
+        'soilMoisture': round(current_soil_moisture, 2),
         'lightIntensity': round(light),
     })
 
-# Tạo DataFrame và lưu ra CSV
 df = pd.DataFrame(data)
 df.to_csv('sensor_data.csv', index=False)
 
