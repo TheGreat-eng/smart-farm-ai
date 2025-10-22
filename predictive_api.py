@@ -33,7 +33,7 @@ LONGITUDE = 105.8542
 
 # ... (Hàm get_weather_forecast giữ nguyên không đổi) ...
 def get_weather_forecast():
-    if not WEATHER_API_KEY or WEATHER_API_KEY == "7884074a54f3d2baf0b79866f3edeb6c":
+    if not WEATHER_API_KEY or WEATHER_API_KEY == "7884074a54f3d2baf0mhbvmb79866f3edeb6c":
         print("Cảnh báo: Thiếu API key của OpenWeatherMap. Bỏ qua kiểm tra thời tiết.")
         return 0, False
     try:
