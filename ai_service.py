@@ -1,37 +1,47 @@
 from flask import Flask, request, jsonify
 import joblib
 import pandas as pd
+import tensorflow as tf
+import numpy as np
+import cv2
+import json
+import os
 from datetime import datetime
 import requests
 import warnings
-import os
 
 warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
 
-# --- TẢI MODEL KHI KHỞI ĐỘNG SERVER ---
-MODEL_PATH = 'soil_moisture_predictor.joblib'
-if not os.path.exists(MODEL_PATH):
-    print(f"LỖI: Không tìm thấy file model '{MODEL_PATH}'. Vui lòng chạy script training trước.")
-    exit()
-
-try:
-    print("Đang tải model dự đoán...")
-    model = joblib.load(MODEL_PATH)
-    print("✅ Model đã được tải thành công!")
-except Exception as e:
-    print(f"Lỗi khi tải model: {e}")
-    exit()
-
-# --- CẤU HÌNH CHO GỢI Ý THÔNG MINH ---
+# --- CẤU HÌNH ---
 SOIL_MOISTURE_THRESHOLD_LOW = 30.0
 RAIN_THRESHOLD_MM = 2.0
 WEATHER_API_KEY = "7884074a54f3d2baf0b79866f3edeb6c"
 LATITUDE = 21.0285
 LONGITUDE = 105.8542
 
-# ... (Hàm get_weather_forecast giữ nguyên không đổi) ...
+# --- TẢI MODEL DỰ ĐOÁN ĐỘ ẨM ---
+try:
+    print("Đang tải model dự đoán độ ẩm...")
+    moisture_model = joblib.load('soil_moisture_predictor.joblib')
+    print("✅ Model dự đoán độ ẩm đã tải thành công!")
+except Exception as e:
+    print(f"LỖI: Không tải được 'soil_moisture_predictor.joblib': {e}")
+    exit()
+
+# --- TẢI MODEL CHẨN ĐOÁN BỆNH ---
+try:
+    print("Đang tải model chẩn đoán bệnh...")
+    disease_model = tf.keras.models.load_model('plant_disease_model.h5')
+    with open('class_indices.json', 'r') as f:
+        class_indices = json.load(f)
+    class_names = {v: k for k, v in class_indices.items()}
+    print("✅ Model chẩn đoán bệnh đã tải thành công!")
+except Exception as e:
+    print(f"LỖI: Không tải được model chẩn đoán bệnh: {e}")
+
+# --- HÀM GỌI WEATHER API ---
 def get_weather_forecast():
     if not WEATHER_API_KEY or WEATHER_API_KEY == "7884074a54f3d2baf0mhbvmb79866f3edeb6c":
         print("Cảnh báo: Thiếu API key của OpenWeatherMap. Bỏ qua kiểm tra thời tiết.")
@@ -50,25 +60,23 @@ def get_weather_forecast():
         print(f"Lỗi khi gọi API thời tiết: {e}")
         return 0, False
 
+# --- API DỰ ĐOÁN ĐỘ ẨM ---
 @app.route('/predict/soil_moisture', methods=['POST'])
-def predict():
+def predict_moisture():
     try:
         input_data = request.get_json()
         features = {}
-        
+
         current = input_data['current_data']
         historical = input_data['historical_data']
 
-        # Lấy độ ẩm đất "hiện tại" (proxy từ 60 phút trước)
         current_soil_moisture_proxy = historical['soilMoisture_lag_60']
 
-        # --- TẠO FEATURES ĐẦY ĐỦ ---
-        features['soilMoisture'] = current_soil_moisture_proxy # Thêm feature mới
+        features['soilMoisture'] = current_soil_moisture_proxy
         features['temperature'] = current['temperature']
         features['humidity'] = current['humidity']
         features['lightIntensity'] = current['lightIntensity']
-        
-          # ... (Tạo các feature lag và rolling y như cũ) ...
+
         features['soilMoisture_lag_60'] = historical['soilMoisture_lag_60']
         features['temperature_lag_60'] = historical['temperature_lag_60']
         features['soilMoisture_lag_30'] = (historical['soilMoisture_lag_60'] + current_soil_moisture_proxy) / 2
@@ -78,45 +86,87 @@ def predict():
         features['soilMoisture_rolling_mean'] = historical['soilMoisture_rolling_mean_60m']
         features['temperature_rolling_mean'] = historical['temperature_rolling_mean_60m']
         features['lightIntensity_rolling_mean'] = historical['lightIntensity_rolling_mean_60m']
+
         now = datetime.now()
         features['hour'] = now.hour
         features['dayofweek'] = now.weekday()
-        
+
         df_input = pd.DataFrame([features])
-        feature_order = model.feature_names_in_
+        feature_order = moisture_model.feature_names_in_
         df_input = df_input[feature_order]
 
-        # --- DỰ ĐOÁN DELTA VÀ TÍNH TOÁN KẾT QUẢ CUỐI CÙNG ---
-        predicted_delta = model.predict(df_input)[0]
-        
-        # Kết quả cuối cùng = Độ ẩm hiện tại + Sự thay đổi dự đoán
+        predicted_delta = moisture_model.predict(df_input)[0]
         predicted_moisture = current_soil_moisture_proxy + predicted_delta
 
-        # ... (Phần logic gợi ý giữ nguyên không đổi) ...
         rain_amount, is_raining_soon = get_weather_forecast()
         suggestion = "Không cần hành động."
         action = "NONE"
+
         if is_raining_soon:
             suggestion = f"Dự báo có mưa ({rain_amount}mm). Tạm thời không cần tưới để tiết kiệm nước."
             action = "SKIP_IRRIGATION"
         elif predicted_moisture < SOIL_MOISTURE_THRESHOLD_LOW:
             suggestion = f"Độ ẩm đất dự kiến sẽ giảm xuống dưới ngưỡng {SOIL_MOISTURE_THRESHOLD_LOW}%. Nên lên lịch tưới."
             action = "SCHEDULE_IRRIGATION"
-        
-        return jsonify({
-            'predicted_soil_moisture_in_3h': round(predicted_moisture, 2),
-            'predicted_delta': round(predicted_delta, 2), # Trả về thêm delta để debug
-            'suggestion': suggestion,
-            'action': action,
-            'weather_info': f"Rain forecast ({rain_amount}mm), Raining soon: {is_raining_soon}"
-        })
-    # except KeyError as e:
-    #     return jsonify({'error': f"Thiếu trường dữ liệu trong JSON đầu vào: {e}"}), 400
-    # except Exception as e:
-    #     return jsonify({'error': f"Đã xảy ra lỗi: {e}"}), 500
-    except Exception as e:
-        return jsonify({'error': f"Đã xảy ra lỗi: {e}"}), 500
 
+        # Thay vì dòng return cũ, hãy dùng cấu trúc mới này
+        return jsonify({
+            "predictions": [
+                {
+                    "predicted_soil_moisture": round(predicted_moisture, 2)
+                }
+            ],
+            "suggestion": {
+                "action": action,
+                "message": suggestion
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': f"Lỗi trong quá trình dự đoán độ ẩm: {e}"}), 500
+
+# --- API CHẨN ĐOÁN BỆNH ---
+def preprocess_image(image_bytes):
+    try:
+        image_array = np.frombuffer(image_bytes, np.uint8)
+        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.resize(image, (224, 224))
+        image = image / 255.0
+        image = np.expand_dims(image, axis=0)
+        return image
+    except Exception as e:
+        print(f"Lỗi tiền xử lý ảnh: {e}")
+        return None
+
+@app.route('/diagnose', methods=['POST'])
+def diagnose_disease():
+    if 'image' not in request.files:
+        return jsonify({'error': 'Không có file ảnh nào được gửi lên'}), 400
+
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({'error': 'Tên file trống'}), 400
+
+    try:
+        image_bytes = file.read()
+        processed_image = preprocess_image(image_bytes)
+
+        if processed_image is None:
+            return jsonify({'error': 'File ảnh không hợp lệ'}), 400
+
+        predictions = disease_model.predict(processed_image)
+        predicted_class_index = np.argmax(predictions[0])
+        confidence = float(np.max(predictions[0]))
+        class_name_raw = class_names[predicted_class_index]
+        class_name_formatted = class_name_raw.replace('___', ' - ').replace('_', ' ')
+
+        return jsonify({
+            'disease': class_name_formatted,
+            'confidence': f"{confidence:.2%}"
+        })
+    except Exception as e:
+        return jsonify({'error': f"Lỗi trong quá trình chẩn đoán: {e}"}), 500
 
 if __name__ == '__main__':
-    app.run(port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
+# Chạy ứng dụng Flask trên cổng 5001
